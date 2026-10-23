@@ -2,7 +2,7 @@
 
 A small multi-task FreeRTOS application on the **NUCLEO-F446RE** (STM32F446RE, Cortex-M4F) that demonstrates inter-task communication with a **message queue**, shared-resource protection with a **mutex**, and interrupt-to-task signaling with **binary and counting semaphores**.
 
-The on-chip temperature sensor is sampled by one task, passed through a queue to a second task that prints it over UART, while a third task deliberately floods the same UART to create contention.
+The on-chip temperature sensor is sampled by one task, passed through a queue to a second task that prints it over UART, while a third task deliberately floods the same UART to create contention. A fourth task is woken by the USER button interrupt through a semaphore.
 
 ## Features
 
@@ -105,7 +105,6 @@ FreeRTOS APIs from the ISR.
 ## Hardware
 
 - NUCLEO-F446RE
-- No external components (internal temperature sensor, on-board LD2, ST-Link VCP)
 - No external components (internal temperature sensor, on-board LD2, USER button B1, ST-Link VCP)
 
 ## Build and run
