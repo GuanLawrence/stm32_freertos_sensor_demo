@@ -61,9 +61,9 @@ Example output with the mutex enabled:
 ```
 [blink] 0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789
 [blink] 0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789
-[0] temp = 31.2 C
+[0] temp = 29.8 C
 [blink] 0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789
-[1] temp = 31.3 C
+[1] temp = 30.6 C
 ```
 
 ## Configuration highlights

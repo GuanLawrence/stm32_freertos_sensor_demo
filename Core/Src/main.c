@@ -32,7 +32,7 @@
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
-#define USE_UART_MUTEX  1   // 改成 0 可觀察沒有 mutex 時的序號跳號
+#define USE_UART_MUTEX  1   // set to 0 to observe skipped sequence numbers without the mutex
 
 /* USER CODE END PD */
 
@@ -53,7 +53,7 @@ osThreadId_t blinkTaskHandle;
 const osThreadAttr_t blinkTask_attributes = {
   .name = "blinkTask",
   .stack_size = 512 * 4,
-  .priority = (osPriority_t) osPriorityNormal,
+  .priority = (osPriority_t) osPriorityLow,
 };
 /* Definitions for sensorTask */
 osThreadId_t sensorTaskHandle;
