@@ -48,19 +48,12 @@ ADC_HandleTypeDef hadc1;
 
 UART_HandleTypeDef huart2;
 
-/* Definitions for defaultTask */
-osThreadId_t defaultTaskHandle;
-const osThreadAttr_t defaultTask_attributes = {
-  .name = "defaultTask",
-  .stack_size = 128 * 4,
-  .priority = (osPriority_t) osPriorityNormal,
-};
 /* Definitions for blinkTask */
 osThreadId_t blinkTaskHandle;
 const osThreadAttr_t blinkTask_attributes = {
   .name = "blinkTask",
   .stack_size = 512 * 4,
-  .priority = (osPriority_t) osPriorityLow,
+  .priority = (osPriority_t) osPriorityNormal,
 };
 /* Definitions for sensorTask */
 osThreadId_t sensorTaskHandle;
@@ -176,7 +169,6 @@ int main(void)
   /* USER CODE END RTOS_QUEUES */
 
   /* Create the thread(s) */
-
   /* creation of blinkTask */
   blinkTaskHandle = osThreadNew(StartBlinkTask, NULL, &blinkTask_attributes);
 
@@ -375,8 +367,6 @@ static void MX_GPIO_Init(void)
 
 /* USER CODE END 4 */
 
-
-
 /* USER CODE BEGIN Header_StartBlinkTask */
 /**
 * @brief Function implementing the blinkTask thread.
@@ -386,25 +376,26 @@ static void MX_GPIO_Init(void)
 /* USER CODE END Header_StartBlinkTask */
 void StartBlinkTask(void *argument)
 {
-  /* USER CODE BEGIN StartBlinkTask */
+  /* USER CODE BEGIN 5 */
   /* Infinite loop */
   for(;;)
   {
 	  BSP_LED_Toggle(LED2);
 
 #if USE_UART_MUTEX
-	  osMutexAcquire(uartMutexHandle, osWaitForever);
+	   osMutexAcquire(uartMutexHandle, osWaitForever);
 #endif
 
 	  printf("[blink] 0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789\r\n");
 
 #if USE_UART_MUTEX
-	  osMutexRelease(uartMutexHandle);
+	   osMutexRelease(uartMutexHandle);
 #endif
 
-	  osDelay(5);
+	   osDelay(5);
+
   }
-  /* USER CODE END StartBlinkTask */
+  /* USER CODE END 5 */
 }
 
 /* USER CODE BEGIN Header_StartSensorTask */
