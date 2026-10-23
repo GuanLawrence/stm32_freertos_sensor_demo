@@ -6,11 +6,12 @@ The on-chip temperature sensor is sampled by one task, passed through a queue to
 
 ## Features
 
-- Three FreeRTOS tasks (CMSIS-RTOS v2 API)
+- Four FreeRTOS tasks (CMSIS-RTOS v2 API)
 - Producer/consumer pattern using a message queue
 - Mutex-protected UART output, with a compile-time switch to observe the failure mode without it
 - ADC reading of the internal temperature sensor, converted with fixed-point (integer-only) arithmetic
 - `printf` retargeted to USART2 (ST-Link Virtual COM Port)
+- Button EXTI with deferred processing via semaphore; binary vs counting comparison
 
 ## Architecture
 
@@ -34,6 +35,7 @@ The on-chip temperature sensor is sampled by one task, passed through a queue to
 | sensorTask | Samples ADC1 temperature channel every 1 s, pushes to queue    | 512           |
 | printTask  | Blocks on the queue, prints each reading with a sequence number| 512           |
 | blinkTask  | Toggles LD2 and prints a long line every 5 ms to load the UART | 512           |
+ | buttonTask | Woken by the button ISR via semaphore, simulates slow processing | 512 |
 
 ## Design notes
 
@@ -65,6 +67,24 @@ Example output with the mutex enabled:
 [blink] 0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789
 [1] temp = 30.6 C
 ```
+
+## Semaphore experiment: binary vs counting
+
+The USER button (PC13) triggers an EXTI interrupt. The ISR only releases a
+semaphore; `buttonTask` (osPriorityNormal) does the actual work. This is
+deferred interrupt processing: keep the ISR short, move the work to a task.
+
+`buttonTask` sleeps 2 s after each event to simulate slow processing.
+Pressing the button 5 times within 2 s:
+
+| `USE_COUNTING_SEM` | Semaphore | Events processed |
+|---|---|---|
+| 0 | Binary (max 1) | 2 — extra releases are discarded while a token is pending |
+| 1 | Counting (max 10, initial 0) | 5 — every press is recorded |
+
+The button EXTI priority is 15, numerically above
+`configLIBRARY_MAX_SYSCALL_INTERRUPT_PRIORITY` (5), so it is allowed to call
+FreeRTOS APIs from the ISR.
 
 ## Configuration highlights
 
