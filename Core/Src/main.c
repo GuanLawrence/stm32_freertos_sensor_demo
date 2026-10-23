@@ -33,7 +33,7 @@
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
 #define USE_UART_MUTEX  1   // set to 0 to observe skipped sequence numbers without the mutex
-
+#define USE_COUNTING_SEM  1   // 0: binary semaphore (events can be lost), 1: counting semaphore
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -69,6 +69,13 @@ const osThreadAttr_t printTask_attributes = {
   .stack_size = 512 * 4,
   .priority = (osPriority_t) osPriorityLow,
 };
+/* Definitions for buttonTask */
+osThreadId_t buttonTaskHandle;
+const osThreadAttr_t buttonTask_attributes = {
+  .name = "buttonTask",
+  .stack_size = 512 * 4,
+  .priority = (osPriority_t) osPriorityNormal,
+};
 /* Definitions for tempQueue */
 osMessageQueueId_t tempQueueHandle;
 const osMessageQueueAttr_t tempQueue_attributes = {
@@ -78,6 +85,16 @@ const osMessageQueueAttr_t tempQueue_attributes = {
 osMutexId_t uartMutexHandle;
 const osMutexAttr_t uartMutex_attributes = {
   .name = "uartMutex"
+};
+/* Definitions for buttonSem */
+osSemaphoreId_t buttonSemHandle;
+const osSemaphoreAttr_t buttonSem_attributes = {
+  .name = "buttonSem"
+};
+/* Definitions for buttonCountSem */
+osSemaphoreId_t buttonCountSemHandle;
+const osSemaphoreAttr_t buttonCountSem_attributes = {
+  .name = "buttonCountSem"
 };
 /* USER CODE BEGIN PV */
 
@@ -91,6 +108,7 @@ static void MX_USART2_UART_Init(void);
 void StartBlinkTask(void *argument);
 void StartSensorTask(void *argument);
 void StartPrintTask(void *argument);
+void StartButtonTask(void *argument);
 
 /* USER CODE BEGIN PFP */
 
@@ -152,6 +170,13 @@ int main(void)
   /* add mutexes, ... */
   /* USER CODE END RTOS_MUTEX */
 
+  /* Create the semaphores(s) */
+  /* creation of buttonSem */
+  buttonSemHandle = osSemaphoreNew(1, 1, &buttonSem_attributes);
+
+  /* creation of buttonCountSem */
+  buttonCountSemHandle = osSemaphoreNew(10, 0, &buttonCountSem_attributes);
+
   /* USER CODE BEGIN RTOS_SEMAPHORES */
   /* add semaphores, ... */
   /* USER CODE END RTOS_SEMAPHORES */
@@ -177,6 +202,9 @@ int main(void)
 
   /* creation of printTask */
   printTaskHandle = osThreadNew(StartPrintTask, NULL, &printTask_attributes);
+
+  /* creation of buttonTask */
+  buttonTaskHandle = osThreadNew(StartButtonTask, NULL, &buttonTask_attributes);
 
   /* USER CODE BEGIN RTOS_THREADS */
   /* add threads, ... */
@@ -364,7 +392,17 @@ static void MX_GPIO_Init(void)
 }
 
 /* USER CODE BEGIN 4 */
-
+void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
+{
+	if (GPIO_Pin == USER_BUTTON_PIN)
+	{
+		#if USE_COUNTING_SEM
+		osSemaphoreRelease(buttonCountSemHandle);
+		#else
+		osSemaphoreRelease(buttonSemHandle);
+		#endif
+	}
+}
 /* USER CODE END 4 */
 
 /* USER CODE BEGIN Header_StartBlinkTask */
@@ -454,6 +492,44 @@ void StartPrintTask(void *argument)
     }
   }
   /* USER CODE END StartPrintTask */
+}
+
+/* USER CODE BEGIN Header_StartButtonTask */
+/**
+* @brief Function implementing the buttonTask thread.
+* @param argument: Not used
+* @retval None
+*/
+/* USER CODE END Header_StartButtonTask */
+void StartButtonTask(void *argument)
+{
+  /* USER CODE BEGIN StartButtonTask */
+	#if USE_COUNTING_SEM
+	  osSemaphoreId_t sem = buttonCountSemHandle;
+	#else
+	  osSemaphoreId_t sem = buttonSemHandle;
+	#endif
+	  uint32_t presses = 0;
+
+	  /* Binary semaphore may be created with count 1; drain it */
+	  osSemaphoreAcquire(sem, 0);
+
+	  for(;;)
+	  {
+	    osSemaphoreAcquire(sem, osWaitForever);
+	    presses++;
+
+	#if USE_UART_MUTEX
+	    osMutexAcquire(uartMutexHandle, osWaitForever);
+	#endif
+	    printf(">>> button: %lu\r\n", presses);
+	#if USE_UART_MUTEX
+	    osMutexRelease(uartMutexHandle);
+	#endif
+
+	    osDelay(2000);   // simulate slow processing
+	  }
+  /* USER CODE END StartButtonTask */
 }
 
 /**
