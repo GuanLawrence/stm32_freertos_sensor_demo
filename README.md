@@ -11,7 +11,7 @@ The on-chip temperature sensor is sampled by one task, passed through a queue to
 - Mutex-protected UART output, with a compile-time switch to observe the failure mode without it
 - ADC reading of the internal temperature sensor, converted with fixed-point (integer-only) arithmetic
 - `printf` retargeted to USART2 (ST-Link Virtual COM Port)
-Button EXTI with deferred processing; comparison of binary/counting semaphores, thread flags and task notifications
+- Button EXTI with deferred processing; comparison of binary/counting semaphores, thread flags and task notifications
 
 ## Architecture
 

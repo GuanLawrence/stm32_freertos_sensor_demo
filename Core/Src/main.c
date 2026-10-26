@@ -33,7 +33,11 @@
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
 #define USE_UART_MUTEX  1   // set to 0 to observe skipped sequence numbers without the mutex
-#define BUTTON_SYNC 3	// 0: binary sem, 1: counting sem, 2: CMSIS thread flags, 3: native task notification
+#define BUTTON_SYNC 0	// 0: binary sem, 1: counting sem, 2: CMSIS thread flags, 3: native task notification
+
+#if (BUTTON_SYNC < 0) || (BUTTON_SYNC > 3)
+#error "BUTTON_SYNC must be 0..3"
+#endif
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -524,8 +528,8 @@ void StartButtonTask(void *argument)
 		  osSemaphoreAcquire(buttonSemHandle, osWaitForever);
 #elif BUTTON_SYNC == 1
 		  osSemaphoreAcquire(buttonCountSemHandle, osWaitForever);
-#elif BUUTON_SYNC == 2
-		  osThreadFlagWait(0x01, osFlagWaitAny, osWaitForever);
+#elif BUTON_SYNC == 2
+		  osThreadFlagsWait(0x01, osFlagsWaitAny, osWaitForever);
 #else
 		  ulTaskNotifyTake(pdFALSE, portMAX_DELAY);
 #endif
