@@ -87,7 +87,7 @@ interrupt processing: keep the ISR short, move the work to a task.
 `main.c` selects the signaling mechanism:
 
 ```c
-#define BUTTON_SYNC  3   // 0: binary sem, 1: counting sem, 2: CMSIS thread flags, 3: native task notification
+#define BUTTON_SYNC  0   // 0: binary sem, 1: counting sem, 2: CMSIS thread flags, 3: native task notification
 ```
 
 Pressing the button 5 times within 2 s:

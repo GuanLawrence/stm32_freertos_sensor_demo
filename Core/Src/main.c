@@ -528,7 +528,7 @@ void StartButtonTask(void *argument)
 		  osSemaphoreAcquire(buttonSemHandle, osWaitForever);
 #elif BUTTON_SYNC == 1
 		  osSemaphoreAcquire(buttonCountSemHandle, osWaitForever);
-#elif BUTON_SYNC == 2
+#elif BUTTON_SYNC == 2
 		  osThreadFlagsWait(0x01, osFlagsWaitAny, osWaitForever);
 #else
 		  ulTaskNotifyTake(pdFALSE, portMAX_DELAY);
