@@ -1,6 +1,6 @@
 # STM32 FreeRTOS Sensor Demo
 
-A small multi-task FreeRTOS application on the **NUCLEO-F446RE** (STM32F446RE, Cortex-M4F) that demonstrates inter-task communication with a **message queue**, shared-resource protection with a **mutex**, and interrupt-to-task signaling with **binary and counting semaphores**.
+A small multi-task FreeRTOS application on the **NUCLEO-F446RE** (STM32F446RE, Cortex-M4F) that demonstrates inter-task communication with a **message queue**, shared-resource protection with a **mutex**, and interrupt-to-task signaling with **semaphores and task notifications**.
 
 The on-chip temperature sensor is sampled by one task, passed through a queue to a second task that prints it over UART, while a third task deliberately floods the same UART to create contention. A fourth task is woken by the USER button interrupt through a semaphore.
 
@@ -11,7 +11,7 @@ The on-chip temperature sensor is sampled by one task, passed through a queue to
 - Mutex-protected UART output, with a compile-time switch to observe the failure mode without it
 - ADC reading of the internal temperature sensor, converted with fixed-point (integer-only) arithmetic
 - `printf` retargeted to USART2 (ST-Link Virtual COM Port)
-- Button EXTI with deferred processing via semaphore; binary vs counting comparison
+Button EXTI with deferred processing; comparison of binary/counting semaphores, thread flags and task notifications
 
 ## Architecture
 
@@ -77,25 +77,38 @@ Example output with the mutex enabled:
 [1] temp = 30.6 C
 ```
 
-## Semaphore experiment: binary vs counting
+## Button sync experiment: semaphores, thread flags, task notification
 
-The USER button (PC13) triggers an EXTI interrupt. The ISR only releases a
-semaphore; `buttonTask` (osPriorityNormal) does the actual work. This is
-deferred interrupt processing: keep the ISR short, move the work to a task.
+The USER button (PC13) triggers an EXTI interrupt. The ISR only signals
+`buttonTask` (osPriorityNormal), which does the actual work. This is deferred
+interrupt processing: keep the ISR short, move the work to a task.
 
 `buttonTask` sleeps 2 s after each event to simulate slow processing.
+`main.c` selects the signaling mechanism:
+
+```c
+#define BUTTON_SYNC  3   // 0: binary sem, 1: counting sem, 2: CMSIS thread flags, 3: native task notification
+```
+
 Pressing the button 5 times within 2 s:
 
-| `USE_COUNTING_SEM` | Semaphore | Events processed |
-|---|---|---|
-| 0 | Binary (max 1) | 2 — extra releases are discarded while a token is pending |
-| 1 | Counting (max 10, initial 0) | 5 — every press is recorded |
+| `BUTTON_SYNC` | Mechanism | Events processed | Why |
+|---|---|---|---|
+| 0 | Binary semaphore | 2 | Max count 1; extra releases are discarded while a token is pending |
+| 1 | Counting semaphore (max 10, initial 0) | 5 | Every release is counted |
+| 2 | CMSIS thread flags | 2 | Setting the same bit repeatedly is idempotent; the wait clears it |
+| 3 | Native task notification (`ulTaskNotifyTake(pdFALSE, ...)`) | 5 | Each give increments the notification value; each take decrements it by 1 |
 
-The button EXTI priority is 15, numerically above
-`configLIBRARY_MAX_SYSCALL_INTERRUPT_PRIORITY` (5), so it is allowed to call
-FreeRTOS APIs from the ISR.
+Notes:
 
-## Configuration highlights
+- Thread flags are implemented on FreeRTOS task notifications, so they need no
+  separate kernel object. Do not mix thread flags and native notifications on
+  the same task: they share the same notification value.
+- Mode 3 uses the native API directly in the ISR (`vTaskNotifyGiveFromISR` +
+  `portYIELD_FROM_ISR`), which the CMSIS wrapper otherwise handles internally.
+- The button EXTI priority is 15, numerically above
+  `configLIBRARY_MAX_SYSCALL_INTERRUPT_PRIORITY` (5), so the ISR may call
+  FreeRTOS APIs.
 
 - FreeRTOS via STM32CubeMX, CMSIS-RTOS v2 interface
 - HAL timebase moved from SysTick to TIM6 (SysTick is used by the FreeRTOS scheduler)

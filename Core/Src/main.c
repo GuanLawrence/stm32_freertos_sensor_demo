@@ -33,7 +33,7 @@
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
 #define USE_UART_MUTEX  1   // set to 0 to observe skipped sequence numbers without the mutex
-#define USE_COUNTING_SEM  1   // 0: binary semaphore (events can be lost), 1: counting semaphore
+#define BUTTON_SYNC 3	// 0: binary sem, 1: counting sem, 2: CMSIS thread flags, 3: native task notification
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -117,6 +117,7 @@ void StartButtonTask(void *argument);
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
 #include <stdio.h>
+#include "task.h"
 
 int _write(int file, char *ptr, int len)
 {
@@ -394,14 +395,21 @@ static void MX_GPIO_Init(void)
 /* USER CODE BEGIN 4 */
 void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
 {
-	if (GPIO_Pin == USER_BUTTON_PIN)
-	{
-		#if USE_COUNTING_SEM
-		osSemaphoreRelease(buttonCountSemHandle);
-		#else
-		osSemaphoreRelease(buttonSemHandle);
-		#endif
-	}
+	if(GPIO_Pin != USER_BUTTON_PIN)
+		return;
+
+#if BUTTON_SYNC == 0
+	osSemaphoreRelease(buttonSemHandle);
+#elif BUTTON_SYNC == 1
+	osSemaphoreRelease(buttonCountSemHandle);
+#elif BUTTON_SYNC == 2
+	osThreadFlagsSet(buttonTaskHandle, 0x01);
+#else
+	BaseType_t woken = pdFALSE;
+	vTaskNotifyGiveFromISR((TaskHandle_t)buttonTaskHandle, &woken);
+	portYIELD_FROM_ISR(woken);
+#endif
+
 }
 /* USER CODE END 4 */
 
@@ -504,19 +512,24 @@ void StartPrintTask(void *argument)
 void StartButtonTask(void *argument)
 {
   /* USER CODE BEGIN StartButtonTask */
-	#if USE_COUNTING_SEM
-	  osSemaphoreId_t sem = buttonCountSemHandle;
-	#else
-	  osSemaphoreId_t sem = buttonSemHandle;
-	#endif
 	  uint32_t presses = 0;
 
-	  /* Binary semaphore may be created with count 1; drain it */
-	  osSemaphoreAcquire(sem, 0);
+#if BUTTON_SYNC == 0
+	  	  osSemaphoreAcquire(buttonSemHandle, 0);	//	drain initial token
+#endif
 
 	  for(;;)
 	  {
-	    osSemaphoreAcquire(sem, osWaitForever);
+#if BUTTON_SYNC == 0
+		  osSemaphoreAcquire(buttonSemHandle, osWaitForever);
+#elif BUTTON_SYNC == 1
+		  osSemaphoreAcquire(buttonCountSemHandle, osWaitForever);
+#elif BUUTON_SYNC == 2
+		  osThreadFlagWait(0x01, osFlagWaitAny, osWaitForever);
+#else
+		  ulTaskNotifyTake(pdFALSE, portMAX_DELAY);
+#endif
+
 	    presses++;
 
 	#if USE_UART_MUTEX
