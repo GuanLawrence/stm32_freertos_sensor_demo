@@ -615,7 +615,7 @@ void StartButtonTask(void *argument)
 
 	    presses++;
 
-	    LOG(">>> button: %lu\r\n", presses);
+	    LOG_IMPORTANT(">>> button: %lu\r\n", presses);
 
 	    osDelay(2000);   // simulate slow processing
 	  }
