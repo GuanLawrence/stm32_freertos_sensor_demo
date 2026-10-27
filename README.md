@@ -12,6 +12,7 @@ The on-chip temperature sensor is sampled by one task, passed through a queue to
 - ADC reading of the internal temperature sensor, converted with fixed-point (integer-only) arithmetic
 - `printf` retargeted to USART2 (ST-Link Virtual COM Port)
 - Button EXTI with deferred processing; comparison of binary/counting semaphores, thread flags and task notifications
+- Gatekeeper logging task with UART DMA; measured caller latency and drop behavior under overload
 
 ## Architecture
 
@@ -114,6 +115,37 @@ Notes:
 - HAL timebase moved from SysTick to TIM6 (SysTick is used by the FreeRTOS scheduler)
 - `USE_NEWLIB_REENTRANT` enabled so each task has its own newlib state when calling `printf`
 - USART2: 115200 baud, 8N1
+
+## Logging experiment: direct printf vs gatekeeper task
+
+`main.c`:
+
+```c
+#define USE_GATEKEEPER  1   // 0: tasks print directly (blocking UART + mutex), 1: log queue + gatekeeper task with UART DMA
+```
+
+- **Mode 0**: each task calls `printf`, which blocks in `HAL_UART_Transmit` until every byte is sent. The UART is protected by `uartMutex`.
+- **Mode 1**: tasks format the message with `vsnprintf` and post it to a 16-entry log queue, then return immediately. A single `logTask` owns the UART, sends each message with `HAL_UART_Transmit_DMA`, and waits for the TX-complete callback (thread flag) before taking the next one. No mutex is needed.
+
+Time spent by `blinkTask` per log call, measured with the DWT cycle counter:
+
+| Mode | blinkTask period | Max time per log call | Dropped |
+|---|---|---|---|
+| 0: direct printf + mutex | 5 ms | 5487 µs | 0 |
+| 1: gatekeeper + DMA | 5 ms | 34 µs | 0 |
+| 1: gatekeeper + DMA | 4 ms (overload) | 23–28 µs | ~46 / s |
+
+**Mode 0 never drops, but the caller pays.** Each 56-byte line takes about 4.9 ms at 115200 baud, so `blinkTask`'s loop stretches from 5 ms to about 10 ms. The UART's limit is pushed back onto the producer.
+
+**Mode 1 keeps callers fast, but cannot create bandwidth.** At 115200 8N1 the UART carries about 11520 B/s, or roughly 205 blink lines per second. With a 4 ms period `blinkTask` produces 250 lines per second, so about 45 lines per second must be dropped. The measured rate was 46 per second.
+
+**Drop policy matters.** With a single drop-when-full policy, the once-per-second temperature line was dropped along with the flood of blink lines. Important messages now use `LOG_IMPORTANT()`, which waits up to 100 ms for a free slot, while `blinkTask` uses `LOG()`, which drops immediately. Under overload only blink lines are lost.
+
+Notes:
+
+- The DMA TX buffer must stay unchanged until the transfer completes, so `logTask` waits for `FLAG_TX_DONE` before reusing it.
+- The STM32F446 (Cortex-M4) has no data cache, so no cache maintenance is needed before DMA. On a Cortex-M7 the buffer would have to be cleaned (`SCB_CleanDCache_by_Addr`) first.
+- In mode 1, `printf` must not be called anywhere: `_write` still uses blocking `HAL_UART_Transmit`, which would collide with the DMA transfer.
 
 ## Hardware
 

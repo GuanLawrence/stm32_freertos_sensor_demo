@@ -22,7 +22,9 @@
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
-
+#include <stdio.h>
+#include <stdarg.h>
+#include <string.h>
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -38,6 +40,18 @@
 #if (BUTTON_SYNC < 0) || (BUTTON_SYNC > 3)
 #error "BUTTON_SYNC must be 0..3"
 #endif
+
+#define USE_GATEKEEPER  1   // 0: tasks print directly (blocking UART + mutex), 1: log queue + gatekeeper task with UART DMA
+#define LOG_MSG_LEN     64
+#define FLAG_TX_DONE    0x01
+
+#if USE_UART_MUTEX
+#define UART_LOCK()    osMutexAcquire(uartMutexHandle, osWaitForever)
+#define UART_UNLOCK()  osMutexRelease(uartMutexHandle)
+#else
+#define UART_LOCK()
+#define UART_UNLOCK()
+#endif
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -51,6 +65,7 @@
 ADC_HandleTypeDef hadc1;
 
 UART_HandleTypeDef huart2;
+DMA_HandleTypeDef hdma_usart2_tx;
 
 /* Definitions for blinkTask */
 osThreadId_t blinkTaskHandle;
@@ -80,6 +95,13 @@ const osThreadAttr_t buttonTask_attributes = {
   .stack_size = 512 * 4,
   .priority = (osPriority_t) osPriorityNormal,
 };
+/* Definitions for logTask */
+osThreadId_t logTaskHandle;
+const osThreadAttr_t logTask_attributes = {
+  .name = "logTask",
+  .stack_size = 256 * 4,
+  .priority = (osPriority_t) osPriorityLow,
+};
 /* Definitions for tempQueue */
 osMessageQueueId_t tempQueueHandle;
 const osMessageQueueAttr_t tempQueue_attributes = {
@@ -101,18 +123,22 @@ const osSemaphoreAttr_t buttonCountSem_attributes = {
   .name = "buttonCountSem"
 };
 /* USER CODE BEGIN PV */
-
+osMessageQueueId_t logQueueHandle;
+volatile uint32_t log_dropped = 0;
+volatile uint32_t blink_log_max_us = 0;
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
 void SystemClock_Config(void);
 static void MX_GPIO_Init(void);
+static void MX_DMA_Init(void);
 static void MX_ADC1_Init(void);
 static void MX_USART2_UART_Init(void);
 void StartBlinkTask(void *argument);
 void StartSensorTask(void *argument);
 void StartPrintTask(void *argument);
 void StartButtonTask(void *argument);
+void StartLogTask(void *argument);
 
 /* USER CODE BEGIN PFP */
 
@@ -128,6 +154,40 @@ int _write(int file, char *ptr, int len)
 	HAL_UART_Transmit(&huart2, (uint8_t *)ptr, len, 100);
 	return len;
 }
+
+static void log_vprintf(uint32_t timeout, const char *fmt, va_list ap)
+{
+  char msg[LOG_MSG_LEN];
+  vsnprintf(msg, sizeof(msg), fmt, ap);
+  if (osMessageQueuePut(logQueueHandle, msg, 0, timeout) != osOK)
+  {
+    log_dropped++;
+  }
+}
+
+void log_printf(const char *fmt, ...)            /* drop if full */
+{
+  va_list ap;
+  va_start(ap, fmt);
+  log_vprintf(0, fmt, ap);
+  va_end(ap);
+}
+
+void log_printf_wait(uint32_t timeout, const char *fmt, ...)  /* wait up to timeout */
+{
+  va_list ap;
+  va_start(ap, fmt);
+  log_vprintf(timeout, fmt, ap);
+  va_end(ap);
+}
+
+#if USE_GATEKEEPER
+#define LOG(...)            log_printf(__VA_ARGS__)
+#define LOG_IMPORTANT(...)  log_printf_wait(100, __VA_ARGS__)
+#else
+#define LOG(...)            do { UART_LOCK(); printf(__VA_ARGS__); UART_UNLOCK(); } while (0)
+#define LOG_IMPORTANT(...)  LOG(__VA_ARGS__)
+#endif
 /* USER CODE END 0 */
 
 /**
@@ -159,10 +219,13 @@ int main(void)
 
   /* Initialize all configured peripherals */
   MX_GPIO_Init();
+  MX_DMA_Init();
   MX_ADC1_Init();
   MX_USART2_UART_Init();
   /* USER CODE BEGIN 2 */
-
+  CoreDebug->DEMCR |= CoreDebug_DEMCR_TRCENA_Msk;
+  DWT->CYCCNT = 0;
+  DWT->CTRL |= DWT_CTRL_CYCCNTENA_Msk;
   /* USER CODE END 2 */
 
   /* Init scheduler */
@@ -196,6 +259,7 @@ int main(void)
 
   /* USER CODE BEGIN RTOS_QUEUES */
   /* add queues, ... */
+  logQueueHandle = osMessageQueueNew(16, LOG_MSG_LEN, NULL);
   /* USER CODE END RTOS_QUEUES */
 
   /* Create the thread(s) */
@@ -210,6 +274,9 @@ int main(void)
 
   /* creation of buttonTask */
   buttonTaskHandle = osThreadNew(StartButtonTask, NULL, &buttonTask_attributes);
+
+  /* creation of logTask */
+  logTaskHandle = osThreadNew(StartLogTask, NULL, &logTask_attributes);
 
   /* USER CODE BEGIN RTOS_THREADS */
   /* add threads, ... */
@@ -375,6 +442,22 @@ static void MX_USART2_UART_Init(void)
 }
 
 /**
+  * Enable DMA controller clock
+  */
+static void MX_DMA_Init(void)
+{
+
+  /* DMA controller clock enable */
+  __HAL_RCC_DMA1_CLK_ENABLE();
+
+  /* DMA interrupt init */
+  /* DMA1_Stream6_IRQn interrupt configuration */
+  HAL_NVIC_SetPriority(DMA1_Stream6_IRQn, 5, 0);
+  HAL_NVIC_EnableIRQ(DMA1_Stream6_IRQn);
+
+}
+
+/**
   * @brief GPIO Initialization Function
   * @param None
   * @retval None
@@ -397,6 +480,14 @@ static void MX_GPIO_Init(void)
 }
 
 /* USER CODE BEGIN 4 */
+void HAL_UART_TxCpltCallback(UART_HandleTypeDef *huart)
+{
+  if (huart == &huart2)
+  {
+    osThreadFlagsSet(logTaskHandle, FLAG_TX_DONE);
+  }
+}
+
 void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
 {
 	if(GPIO_Pin != USER_BUTTON_PIN)
@@ -430,20 +521,14 @@ void StartBlinkTask(void *argument)
   /* Infinite loop */
   for(;;)
   {
-	  BSP_LED_Toggle(LED2);
+	BSP_LED_Toggle(LED2);
 
-#if USE_UART_MUTEX
-	   osMutexAcquire(uartMutexHandle, osWaitForever);
-#endif
+	uint32_t c0 = DWT->CYCCNT;
+	LOG("[blink] 0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789\r\n");
+	uint32_t us = (DWT->CYCCNT - c0) / (SystemCoreClock / 1000000U);
+	if (us > blink_log_max_us) blink_log_max_us = us;
 
-	  printf("[blink] 0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789\r\n");
-
-#if USE_UART_MUTEX
-	   osMutexRelease(uartMutexHandle);
-#endif
-
-	   osDelay(5);
-
+	osDelay(5);
   }
   /* USER CODE END 5 */
 }
@@ -493,14 +578,8 @@ void StartPrintTask(void *argument)
   {
     if(osMessageQueueGet(tempQueueHandle, &t, NULL, osWaitForever) == osOK)
     {
-#if USE_UART_MUTEX
-    	osMutexAcquire(uartMutexHandle, osWaitForever);
-#endif
-    	printf("[%lu] temp = %ld.%ld C\r\n", seq++, t/10, t%10);
-
-#if USE_UART_MUTEX
-    	osMutexRelease(uartMutexHandle);
-#endif
+    	LOG_IMPORTANT("[%lu] temp=%ld.%ld C max_log=%luus drop=%lu\r\n",
+            seq++, t / 10, t % 10, blink_log_max_us, log_dropped);
     }
   }
   /* USER CODE END StartPrintTask */
@@ -536,17 +615,35 @@ void StartButtonTask(void *argument)
 
 	    presses++;
 
-	#if USE_UART_MUTEX
-	    osMutexAcquire(uartMutexHandle, osWaitForever);
-	#endif
-	    printf(">>> button: %lu\r\n", presses);
-	#if USE_UART_MUTEX
-	    osMutexRelease(uartMutexHandle);
-	#endif
+	    LOG(">>> button: %lu\r\n", presses);
 
 	    osDelay(2000);   // simulate slow processing
 	  }
   /* USER CODE END StartButtonTask */
+}
+
+/* USER CODE BEGIN Header_StartLogTask */
+/**
+* @brief Function implementing the logTask thread.
+* @param argument: Not used
+* @retval None
+*/
+/* USER CODE END Header_StartLogTask */
+void StartLogTask(void *argument)
+{
+	  /* USER CODE BEGIN StartLogTask */
+	#if USE_GATEKEEPER
+	  static char buf[LOG_MSG_LEN];
+	  for(;;)
+	  {
+	    osMessageQueueGet(logQueueHandle, buf, NULL, osWaitForever);
+	    HAL_UART_Transmit_DMA(&huart2, (uint8_t *)buf, strlen(buf));
+	    osThreadFlagsWait(FLAG_TX_DONE, osFlagsWaitAny, osWaitForever);
+	  }
+	#else
+	  osThreadExit();
+	#endif
+	  /* USER CODE END StartLogTask */
 }
 
 /**
