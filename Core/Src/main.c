@@ -36,6 +36,7 @@
 /* USER CODE BEGIN PD */
 #define USE_UART_MUTEX  1   // set to 0 to observe skipped sequence numbers without the mutex
 #define BUTTON_SYNC 0	// 0: binary sem, 1: counting sem, 2: CMSIS thread flags, 3: native task notification
+#define STACK_OVERFLOW_TEST  0   // 1: blinkTask allocates a large local array to overflow its stack
 
 #if (BUTTON_SYNC < 0) || (BUTTON_SYNC > 3)
 #error "BUTTON_SYNC must be 0..3"
@@ -521,6 +522,11 @@ void StartBlinkTask(void *argument)
   /* Infinite loop */
   for(;;)
   {
+#if STACK_OVERFLOW_TEST
+    volatile uint8_t big[1900];
+    for (uint32_t i = 0; i < sizeof(big); i++) big[i] = (uint8_t)i;
+#endif
+
 	BSP_LED_Toggle(LED2);
 
 	uint32_t c0 = DWT->CYCCNT;
@@ -576,10 +582,22 @@ void StartPrintTask(void *argument)
 	uint32_t seq = 0;
   for(;;)
   {
+
+
     if(osMessageQueueGet(tempQueueHandle, &t, NULL, osWaitForever) == osOK)
     {
     	LOG_IMPORTANT("[%lu] temp=%ld.%ld C max_log=%luus drop=%lu\r\n",
             seq++, t / 10, t % 10, blink_log_max_us, log_dropped);
+
+        if ((seq % 10) == 0)
+        {
+          LOG_IMPORTANT("stk free: blink=%lu sens=%lu prt=%lu btn=%lu log=%lu\r\n",
+                        osThreadGetStackSpace(blinkTaskHandle),
+                        osThreadGetStackSpace(sensorTaskHandle),
+                        osThreadGetStackSpace(printTaskHandle),
+                        osThreadGetStackSpace(buttonTaskHandle),
+                        osThreadGetStackSpace(logTaskHandle));
+        }
     }
   }
   /* USER CODE END StartPrintTask */
@@ -631,7 +649,7 @@ void StartButtonTask(void *argument)
 /* USER CODE END Header_StartLogTask */
 void StartLogTask(void *argument)
 {
-	  /* USER CODE BEGIN StartLogTask */
+  /* USER CODE BEGIN StartLogTask */
 	#if USE_GATEKEEPER
 	  static char buf[LOG_MSG_LEN];
 	  for(;;)
@@ -643,7 +661,7 @@ void StartLogTask(void *argument)
 	#else
 	  osThreadExit();
 	#endif
-	  /* USER CODE END StartLogTask */
+  /* USER CODE END StartLogTask */
 }
 
 /**

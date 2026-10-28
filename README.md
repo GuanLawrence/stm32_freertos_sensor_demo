@@ -13,6 +13,7 @@ The on-chip temperature sensor is sampled by one task, passed through a queue to
 - `printf` retargeted to USART2 (ST-Link Virtual COM Port)
 - Button EXTI with deferred processing; comparison of binary/counting semaphores, thread flags and task notifications
 - Gatekeeper logging task with UART DMA; measured caller latency and drop behavior under overload
+- Per-task stack high water mark reporting and stack overflow detection
 
 ## Architecture
 
@@ -146,6 +147,53 @@ Notes:
 - The DMA TX buffer must stay unchanged until the transfer completes, so `logTask` waits for `FLAG_TX_DONE` before reusing it.
 - The STM32F446 (Cortex-M4) has no data cache, so no cache maintenance is needed before DMA. On a Cortex-M7 the buffer would have to be cleaned (`SCB_CleanDCache_by_Addr`) first.
 - In mode 1, `printf` must not be called anywhere: `_write` still uses blocking `HAL_UART_Transmit`, which would collide with the DMA transfer.
+
+## Stack usage experiment
+
+FreeRTOS fills each task stack with `0xA5` when the task is created.
+`osThreadGetStackSpace()` (which calls `uxTaskGetStackHighWaterMark()`) scans
+for untouched bytes and reports the minimum free stack since start-up.
+`blinkTask` logs it for every task every 10 readings.
+
+Measured after several minutes, with the button pressed:
+
+| Task | Allocated (bytes) | Min free | Used | Work |
+|---|---|---|---|---|
+| blinkTask | 2048 | 1544 | 504 | `vsnprintf` + queue |
+| printTask | 2048 | 1456 | 592 | `vsnprintf` with the longest format |
+| buttonTask | 2048 | 1488 | 560 | `vsnprintf` + queue |
+| sensorTask | 2048 | 1848 | 200 | ADC + queue |
+| logTask | 1024 | 808 | 216 | queue + DMA start (static buffer) |
+
+Tasks that format strings use 2–3× more stack than those that don't; most of it
+comes from `vsnprintf` and the 64-byte local message buffer. A high water mark
+only covers code paths exercised during the test, so a margin is still required.
+
+### Overflow detection
+
+`configCHECK_FOR_STACK_OVERFLOW` is set to 2: at each context switch the kernel
+checks that the lowest 16 bytes of the outgoing task's stack still hold `0xA5`,
+and calls `vApplicationStackOverflowHook()` if not.
+
+```c
+#define STACK_OVERFLOW_TEST  0   // 1: blinkTask allocates a large local array to overflow its stack
+```
+
+Setting it to 1 makes `blinkTask` allocate a 1900-byte local array on top of its
+normal ~500 bytes of usage. The hook was called and the debugger showed
+`stack_overflow_task = "blinkTask"`.
+
+Limitations of this software check:
+
+- It runs only at context switches, so memory beyond the stack may already be
+  corrupted when the hook is called. The hook therefore disables interrupts and
+  halts instead of trying to continue.
+- It reports the task whose guard bytes are damaged. If one task overflows into
+  another task's memory, the reported task can be the victim, not the culprit.
+- An overflow that jumps past the 16-byte pattern without writing it is missed.
+
+Hardware alternatives are an MPU guard region at the bottom of each stack or, on
+ARMv8-M cores, the PSPLIM stack limit register.
 
 ## Hardware
 
