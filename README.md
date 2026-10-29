@@ -14,6 +14,7 @@ The on-chip temperature sensor is sampled by one task, passed through a queue to
 - Button EXTI with deferred processing; comparison of binary/counting semaphores, thread flags and task notifications
 - Gatekeeper logging task with UART DMA; measured caller latency and drop behavior under overload
 - Per-task stack high water mark reporting and stack overflow detection
+- IWDG with per-task health check-ins; watchdog cause preserved across reset
 
 ## Architecture
 
@@ -194,6 +195,56 @@ Limitations of this software check:
 
 Hardware alternatives are an MPU guard region at the bottom of each stack or, on
 ARMv8-M cores, the PSPLIM stack limit register.
+
+## Watchdog experiment
+
+The independent watchdog (IWDG, ~4 s timeout from the LSI clock) is refreshed
+only when every monitored task has recently proven it is alive.
+
+- `blinkTask`, `sensorTask` and `printTask` each set their own bit in an
+  event flags object (`aliveFlags`).
+- `wdgTask` (osPriorityAboveNormal) waits up to 1.5 s for all bits with
+  `osFlagsWaitAll`. If all arrive it refreshes the IWDG; otherwise it logs the
+  missing bits and does not refresh.
+- `__HAL_DBGMCU_FREEZE_IWDG()` stops the IWDG while the debugger halts the core.
+
+Refreshing the watchdog from a single task would only prove that one task is
+running; requiring a check-in from each task catches any one of them hanging.
+
+```c
+#define WDG_FAULT_TEST  0   // 1: sensorTask hangs after 10 readings
+```
+
+With `WDG_FAULT_TEST 1`, `sensorTask` enters an infinite loop:
+
+```
+WDG: missing 0x06
+WDG: missing 0x06
+*** Reset cause: IWDG ***
+*** [BKP]    last missing 0x06 ***
+*** [noinit] last missing 0x06 ***
+```
+
+`0x06` is `sensorTask` (0x02) plus `printTask` (0x04). `printTask` is not
+faulty, but it blocks on the queue fed by `sensorTask`, so it stops checking in
+too. The watchdog reports which functions stopped; identifying the root cause
+requires knowing the data flow. Checking in on a receive timeout instead would
+isolate `sensorTask`. `blinkTask` keeps running thanks to time slicing.
+
+### Keeping the cause across the reset
+
+The IWDG has no interrupt, so `wdgTask` stores the missing bits as soon as it
+decides not to refresh. They are kept in two places, both with a magic number to
+reject stale or random content:
+
+- RTC backup register `BKP0R` (backup domain; survives system reset, and power
+  loss if VBAT has a battery)
+- A `.noinit` RAM section added to the linker script (`NOLOAD`, not cleared by
+  the startup code; survives system reset, lost on power loss)
+
+On boot, if the IWDG reset flag is set, both are read and printed, then cleared.
+On the NUCLEO board VBAT is tied to VDD, so both are lost when USB power is removed.
+
 
 ## Hardware
 
